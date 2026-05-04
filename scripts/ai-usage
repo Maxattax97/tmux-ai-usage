@@ -1,0 +1,261 @@
+#!/bin/sh
+
+set -eu
+
+get_tmux_option() {
+    option=$1
+    default=$2
+    value=$(tmux show-option -gqv "$option" 2>/dev/null || true)
+
+    if [ -n "$value" ]; then
+        printf '%s\n' "$value"
+    else
+        printf '%s\n' "$default"
+    fi
+}
+
+label_unknown() {
+    printf '%s\n' "$UNKNOWN"
+}
+
+write_cache() {
+    value=$1
+    tmp_file=$(mktemp "$CACHE_DIR/tmux-ai-usage-status.tmp.XXXXXX")
+
+    umask 077
+    printf '%s\n' "$value" > "$tmp_file"
+    mv "$tmp_file" "$CACHE_FILE"
+}
+
+write_meta() {
+    tmp_file=$(mktemp "$CACHE_DIR/tmux-ai-usage-status.meta.tmp.XXXXXX")
+    failure_count=${1:-0}
+
+    umask 077
+    {
+        printf 'provider=%s\n' "$PROVIDER"
+        printf 'unknown=%s\n' "$UNKNOWN"
+        printf 'failure_count=%s\n' "$failure_count"
+    } > "$tmp_file"
+    mv "$tmp_file" "$META_FILE"
+}
+
+meta_failure_count() {
+    [ -f "$META_FILE" ] || {
+        printf '0\n'
+        return
+    }
+
+    value=0
+    while IFS='=' read -r key raw_value; do
+        [ "$key" = "failure_count" ] || continue
+        value=$raw_value
+        break
+    done < "$META_FILE"
+
+    case $value in
+        ''|*[!0-9]*) printf '0\n' ;;
+        *) printf '%s\n' "$value" ;;
+    esac
+}
+
+cached_value() {
+    [ -f "$CACHE_FILE" ] || return 1
+    cat "$CACHE_FILE"
+}
+
+unknown() {
+    value=$(label_unknown)
+    write_cache "$value"
+    write_meta 0
+    printf '%s\n' "$value"
+    exit 0
+}
+
+unknown_with_retries() {
+    failure_count=$(meta_failure_count)
+    failure_count=$((failure_count + 1))
+
+    if [ "$failure_count" -le 3 ] && cached=$(cached_value 2>/dev/null); then
+        case $cached in
+            ''|'?') ;;
+            *)
+                write_meta "$failure_count"
+                printf '%s\n' "$cached"
+                exit 0
+                ;;
+        esac
+    fi
+
+    value=$(label_unknown)
+    write_cache "$value"
+    write_meta "$failure_count"
+    printf '%s\n' "$value"
+    exit 0
+}
+
+get_mtime() {
+    path=$1
+
+    stat -f %m "$path" 2>/dev/null || stat -c %Y "$path" 2>/dev/null || printf '0\n'
+}
+
+read_cache() {
+    [ -f "$CACHE_FILE" ] || return 1
+    [ -f "$META_FILE" ] || return 1
+
+    now=$(date +%s)
+    mtime=$(get_mtime "$CACHE_FILE")
+    age=$((now - mtime))
+
+    [ "$age" -lt "$INTERVAL" ] || return 1
+
+    expected_meta=$(mktemp "${TMPDIR:-/tmp}/tmux-ai-usage-status.meta.expected.XXXXXX")
+    trap 'rm -f "$expected_meta"' EXIT HUP INT TERM
+    {
+        printf 'provider=%s\n' "$PROVIDER"
+        printf 'unknown=%s\n' "$UNKNOWN"
+    } > "$expected_meta"
+
+    if cmp -s "$META_FILE" "$expected_meta"; then
+        rm -f "$expected_meta"
+        trap - EXIT HUP INT TERM
+        cat "$CACHE_FILE"
+        return 0
+    fi
+
+    rm -f "$expected_meta"
+    trap - EXIT HUP INT TERM
+    return 1
+}
+
+normalize_interval() {
+    case $1 in
+        ''|*[!0-9]*) printf '60\n' ;;
+        *) printf '%s\n' "$1" ;;
+    esac
+}
+
+is_recent_file() {
+    path=$1
+    max_age=$2
+
+    [ -f "$path" ] || return 1
+
+    now=$(date +%s)
+    mtime=$(get_mtime "$path")
+    age=$((now - mtime))
+
+    [ "$age" -lt "$max_age" ]
+}
+
+clamp_percent() {
+    value=$1
+
+    case $value in
+        ''|*[!0-9-]*) return 1 ;;
+    esac
+
+    if [ "$value" -lt 0 ]; then
+        value=0
+    fi
+
+    if [ "$value" -gt 100 ]; then
+        value=100
+    fi
+
+    printf '%s\n' "$value"
+}
+
+fetch_claude_percent() {
+    command -v jq >/dev/null 2>&1 || return 1
+
+    [ -f "$CLAUDE_CACHE_FILE" ] || return 1
+
+    jq -r '
+        if .available != true then
+            empty
+        elif .remaining_percentage? != null then
+            .remaining_percentage | floor
+        elif .used_percentage? != null then
+            (100 - .used_percentage) | floor
+        else
+            empty
+        end
+    ' "$CLAUDE_CACHE_FILE" 2>/dev/null
+}
+
+fetch_codex_percent() {
+    command -v jq >/dev/null 2>&1 || return 1
+
+    latest_file=$(LC_ALL=C ls -1t "$HOME"/.codex/sessions/*/*/*/rollout-*.jsonl 2>/dev/null | sed -n '1p')
+    [ -n "$latest_file" ] || return 1
+
+    # Match Codex's own status behavior and ignore stale snapshots.
+    is_recent_file "$latest_file" 900 || return 1
+
+    jq -rs '
+        map(
+            select(
+                .type == "event_msg"
+                and .payload.type == "token_count"
+                and .payload.rate_limits.primary.used_percent? != null
+            )
+        )
+        | last
+        | if . == null then
+            empty
+          else
+            (100 - .payload.rate_limits.primary.used_percent) | floor
+          end
+    ' "$latest_file" 2>/dev/null
+}
+
+resolve_percent() {
+    case $PROVIDER in
+        auto)
+            percent=$(fetch_claude_percent || true)
+            if [ -z "$percent" ]; then
+                percent=$(fetch_codex_percent || true)
+            fi
+            ;;
+        claude)
+            percent=$(fetch_claude_percent || true)
+            ;;
+        codex)
+            percent=$(fetch_codex_percent || true)
+            ;;
+        *)
+            percent=
+            ;;
+    esac
+
+    printf '%s\n' "$percent"
+}
+
+PROVIDER=$(get_tmux_option "@ai_usage_provider" "auto")
+INTERVAL=$(normalize_interval "$(get_tmux_option "@ai_usage_interval" "60")")
+UNKNOWN=$(get_tmux_option "@ai_usage_unknown" "?")
+
+CACHE_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/tmux-ai-usage
+CACHE_FILE=$CACHE_DIR/tmux-ai-usage-status.txt
+META_FILE=$CACHE_DIR/tmux-ai-usage-status.meta
+CLAUDE_CACHE_FILE=$CACHE_DIR/tmux-ai-usage-claude-rate-limits.json
+mkdir -p "$CACHE_DIR"
+
+if read_cache; then
+    exit 0
+fi
+
+percent=$(resolve_percent)
+
+percent=$(clamp_percent "$percent" || true)
+
+if [ -z "$percent" ]; then
+    unknown_with_retries
+fi
+
+value=$(printf '%s%%' "$percent")
+write_cache "$value"
+write_meta 0
+printf '%s\n' "$value"

@@ -1,0 +1,54 @@
+#!/bin/sh
+
+set -eu
+
+CACHE_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/tmux-ai-usage
+CACHE_FILE=$CACHE_DIR/tmux-ai-usage-claude-rate-limits.json
+MIN_UPDATE_SECONDS=30
+mkdir -p "$CACHE_DIR"
+
+command -v jq >/dev/null 2>&1 || exit 0
+
+input=$(cat)
+
+get_mtime() {
+    path=$1
+
+    stat -f %m "$path" 2>/dev/null || stat -c %Y "$path" 2>/dev/null || printf '0\n'
+}
+
+if [ -f "$CACHE_FILE" ]; then
+    now=$(date +%s)
+    mtime=$(get_mtime "$CACHE_FILE")
+    age=$((now - mtime))
+
+    if [ "$age" -lt "$MIN_UPDATE_SECONDS" ]; then
+        exit 0
+    fi
+fi
+
+tmp_file=$(mktemp "$CACHE_DIR/tmux-ai-usage-claude-rate-limits.tmp.XXXXXX")
+trap 'rm -f "$tmp_file"' EXIT HUP INT TERM
+
+if printf '%s\n' "$input" | jq -e '.rate_limits.five_hour.used_percentage? != null' >/dev/null 2>&1; then
+    printf '%s\n' "$input" | jq '{
+        available: true,
+        session_id: .session_id,
+        used_percentage: .rate_limits.five_hour.used_percentage,
+        remaining_percentage: (100 - .rate_limits.five_hour.used_percentage),
+        resets_at: .rate_limits.five_hour.resets_at
+    }' > "$tmp_file"
+elif [ ! -f "$CACHE_FILE" ]; then
+    printf '%s\n' "$input" | jq '{
+        available: false,
+        session_id: .session_id,
+        used_percentage: null,
+        remaining_percentage: null,
+        resets_at: null
+    }' > "$tmp_file"
+else
+    exit 0
+fi
+
+mv "$tmp_file" "$CACHE_FILE"
+trap - EXIT HUP INT TERM
