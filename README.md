@@ -29,7 +29,6 @@ run-shell '~/.tmux/plugins/tmux-ai-usage/ai_usage.tmux'
 ## Requirements
 
 - `tmux`
-- `jq`
 - Claude Code for `claude`
 
 ## Usage
@@ -115,12 +114,12 @@ The plugin also stores cache metadata alongside it so option changes invalidate 
 For Claude Code, the statusline helper stores the latest 5-hour window payload at:
 
 ```text
-${XDG_CACHE_HOME:-$HOME/.cache}/tmux-ai-usage/tmux-ai-usage-claude-rate-limits.json
+${XDG_CACHE_HOME:-$HOME/.cache}/tmux-ai-usage/tmux-ai-usage-claude-rate-limits.txt
 ```
 
 ## Unavailable Data
 
-If `jq` or provider data is unavailable, the plugin outputs:
+If provider data is unavailable, the plugin outputs:
 
 ```text
 ?

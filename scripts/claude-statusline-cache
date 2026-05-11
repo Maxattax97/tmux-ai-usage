@@ -3,13 +3,37 @@
 set -eu
 
 CACHE_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/tmux-ai-usage
-CACHE_FILE=$CACHE_DIR/tmux-ai-usage-claude-rate-limits.json
+CACHE_FILE=$CACHE_DIR/tmux-ai-usage-claude-rate-limits.txt
 MIN_UPDATE_SECONDS=30
 mkdir -p "$CACHE_DIR"
 
-command -v jq >/dev/null 2>&1 || exit 0
-
 input=$(cat)
+
+extract_claude_used_percentage() {
+    printf '%s\n' "$input" | awk '
+        {
+            idx = index($0, "\"five_hour\"")
+            if (idx == 0) {
+                next
+            }
+
+            rest = substr($0, idx)
+            key = "\"used_percentage\""
+            key_idx = index(rest, key)
+            if (key_idx == 0) {
+                next
+            }
+
+            rest = substr(rest, key_idx + length(key))
+            sub(/^[^:]*:[[:space:]]*/, "", rest)
+
+            if (match(rest, /^-?[0-9]+([.][0-9]+)?/)) {
+                print substr(rest, RSTART, RLENGTH)
+                exit
+            }
+        }
+    '
+}
 
 get_mtime() {
     path=$1
@@ -30,22 +54,22 @@ fi
 tmp_file=$(mktemp "$CACHE_DIR/tmux-ai-usage-claude-rate-limits.tmp.XXXXXX")
 trap 'rm -f "$tmp_file"' EXIT HUP INT TERM
 
-if printf '%s\n' "$input" | jq -e '.rate_limits.five_hour.used_percentage? != null' >/dev/null 2>&1; then
-    printf '%s\n' "$input" | jq '{
-        available: true,
-        session_id: .session_id,
-        used_percentage: .rate_limits.five_hour.used_percentage,
-        remaining_percentage: (100 - .rate_limits.five_hour.used_percentage),
-        resets_at: .rate_limits.five_hour.resets_at
-    }' > "$tmp_file"
+used_percentage=$(extract_claude_used_percentage)
+
+if [ -n "$used_percentage" ]; then
+    remaining_percentage=$(awk -v used="$used_percentage" 'BEGIN { printf "%d\n", 100 - used }')
+
+    {
+        printf 'available=true\n'
+        printf 'used_percentage=%s\n' "$used_percentage"
+        printf 'remaining_percentage=%s\n' "$remaining_percentage"
+    } > "$tmp_file"
 elif [ ! -f "$CACHE_FILE" ]; then
-    printf '%s\n' "$input" | jq '{
-        available: false,
-        session_id: .session_id,
-        used_percentage: null,
-        remaining_percentage: null,
-        resets_at: null
-    }' > "$tmp_file"
+    {
+        printf 'available=false\n'
+        printf 'used_percentage=\n'
+        printf 'remaining_percentage=\n'
+    } > "$tmp_file"
 else
     exit 0
 fi
