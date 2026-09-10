@@ -1,0 +1,106 @@
+#!/bin/sh
+
+set -eu
+
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+
+get_tmux_option() {
+	value=$(tmux show-option -gqv "$1" 2>/dev/null || true)
+
+	if [ -n "$value" ]; then
+		printf '%s\n' "$value"
+	else
+		printf '%s\n' "$2"
+	fi
+}
+
+# tmux options are the user-facing knobs; env vars let hooks override them when
+# no server is running.
+AI_USAGE_ACTIVE_TTL=${AI_USAGE_ACTIVE_TTL:-$(get_tmux_option "@ai_usage_active_ttl" "300")}
+AI_USAGE_ACTIVE_MAX=${AI_USAGE_ACTIVE_MAX:-$(get_tmux_option "@ai_usage_active_max" "3600")}
+AI_USAGE_INHIBIT_SLEEP=${AI_USAGE_INHIBIT_SLEEP:-$(get_tmux_option "@ai_usage_inhibit_sleep" "on")}
+export AI_USAGE_ACTIVE_TTL AI_USAGE_ACTIVE_MAX AI_USAGE_INHIBIT_SLEEP
+
+# shellcheck source=scripts/ai-activity-lib.sh disable=SC1091
+. "$SCRIPT_DIR/ai-activity-lib.sh"
+
+usage() {
+	cat >&2 <<'USAGE'
+usage: ai-activity begin|end|status|prune [session-id]
+
+Claude Code hook entry point. With no session-id, one is read from the hook
+JSON on stdin (or $CLAUDE_SESSION_ID).
+
+  begin   mark this session as actively working, inhibit system sleep
+  end     mark this session idle, release sleep inhibition if all are idle
+  status  print the active/idle icon
+  prune   drop abandoned markers and resync sleep inhibition
+USAGE
+	exit 2
+}
+
+# Pull "session_id":"..." out of the hook payload without requiring jq.
+read_session_id_from_stdin() {
+	[ -t 0 ] && return 0
+
+	awk '
+        {
+            idx = index($0, "\"session_id\"")
+            if (idx == 0) {
+                next
+            }
+
+            rest = substr($0, idx + length("\"session_id\""))
+            sub(/^[^:]*:[[:space:]]*"/, "", rest)
+
+            if (match(rest, /^[^"]+/)) {
+                print substr(rest, RSTART, RLENGTH)
+                exit
+            }
+        }
+    '
+}
+
+resolve_session_id() {
+	if [ -n "${1:-}" ]; then
+		printf '%s\n' "$1"
+		return
+	fi
+
+	session=$(read_session_id_from_stdin || true)
+	[ -n "$session" ] || session=${CLAUDE_SESSION_ID:-default}
+	printf '%s\n' "$session"
+}
+
+AGENT=${AI_USAGE_AGENT:-claude}
+ACTIVE_ICON=${AI_USAGE_ACTIVE_ICON:-$(get_tmux_option "@ai_usage_active_icon" "●")}
+IDLE_ICON=${AI_USAGE_IDLE_ICON:-$(get_tmux_option "@ai_usage_idle_icon" "")}
+
+command=${1:-}
+[ -n "$command" ] || usage
+shift 2>/dev/null || true
+
+case $command in
+begin)
+	activity_begin "$AGENT" "$(resolve_session_id "${1:-}")"
+	;;
+end)
+	activity_end "$AGENT" "$(resolve_session_id "${1:-}")"
+	;;
+status) ;;
+prune) ;;
+*)
+	usage
+	;;
+esac
+
+activity_prune
+inhibit_sync
+
+if [ "$command" = "status" ]; then
+	if activity_is_active; then
+		printf '%s\n' "$ACTIVE_ICON"
+	else
+		printf '%s\n' "$IDLE_ICON"
+	fi
+fi
