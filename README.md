@@ -30,7 +30,7 @@ run-shell '~/.tmux/plugins/tmux-ai-usage/ai_usage.tmux'
 ## Requirements
 
 - `tmux`
-- Claude Code for `claude`
+- Claude Code for `claude`, Codex for `codex`, opencode for activity tracking
 - Optional, for sleep inhibition: `caffeinate` (macOS, built in) or
   `systemd-inhibit` (Linux, part of systemd)
 
@@ -79,6 +79,38 @@ register the activity hooks in the same settings file:
 
 `PreToolUse` and `PostToolUse` bracket every tool call, so a long turn keeps
 refreshing its own marker rather than aging out.
+
+### Codex
+
+Codex reads lifecycle hooks from `~/.codex/hooks.json`. Merge the shipped
+snippet into yours, or symlink it if you have no other codex hooks:
+
+```sh
+ln -s ~/.tmux/plugins/tmux-ai-usage/hooks/codex-hooks.json ~/.codex/hooks.json
+```
+
+It wires `UserPromptSubmit`, `PreToolUse`, and `PostToolUse` to `begin`, and
+`PermissionRequest`, `Stop`, `Interrupt`, and `SessionEnd` to `end`. Codex asks
+you to review new hooks the next time it starts; they do not run until trusted.
+The commands resolve this checkout through `$AI_USAGE_HOME`, falling back to
+`~/.tmux/plugins/tmux-ai-usage`, so set `AI_USAGE_HOME` if you installed it
+somewhere else.
+
+### opencode
+
+opencode takes plugins rather than hook commands. Add this one to
+`~/.config/opencode/opencode.json` with an absolute path:
+
+```json
+{
+  "plugin": ["/home/you/.tmux/plugins/tmux-ai-usage/plugins/opencode.js"]
+}
+```
+
+It marks work on `chat.message` and around every tool call, and clears the
+marker on the `session.idle`, `session.error`, and `session.deleted` events.
+Because the plugin runs inside the opencode process, it reports that PID
+directly instead of relying on the process-tree walk.
 
 Direct script use:
 
@@ -165,7 +197,8 @@ free to turn off. If neither helper is installed, the icon still works and sleep
 inhibition is silently skipped.
 
 Each marker records the PID of the agent process that owns it, found by walking
-up from the hook to the first `claude` ancestor. A marker whose owner is still
+up from the hook to the first ancestor named after the agent, or reported
+directly by an in-process plugin. A marker whose owner is still
 alive stays active no matter how long the turn runs, so an hour-long tool call
 never lets the machine drop to sleep underneath it. When the owner exits, the
 marker goes with it on the next poll.
@@ -186,12 +219,20 @@ hook ever fires again. To see what is currently holding it:
 ls ${XDG_CACHE_HOME:-$HOME/.cache}/tmux-ai-usage/active/
 ```
 
-Only Claude Code is wired up today. Other agents can reuse the same mechanism by
-calling the script with `AI_USAGE_AGENT` set, which namespaces their markers:
+Claude Code, Codex, and opencode are wired up. Markers are namespaced per agent,
+so the icon is active whenever *any* of them is working and sleep is only
+released once they are all idle. Another agent can join with:
 
 ```sh
-AI_USAGE_AGENT=codex scripts/ai-activity begin "$session_id"
+scripts/ai-activity --agent someagent [--pid "$owner_pid"] begin "$session_id"
 ```
+
+`--pid` is for agents that can report their own process; otherwise the owner is
+found by walking up the process tree looking for one named after the agent.
+
+Note that this is independent of `@ai_usage_provider`, which only decides whose
+usage percent to display. opencode has no single rate-limit window to report, so
+it contributes activity but not a percent.
 
 ## Cache
 

@@ -1,0 +1,6 @@
+# Local-only agent tooling state and private per-project instructions
+.claude/.headroom_*
+.claude/settings.local.json
+.claude/worktrees
+.serena/
+CLAUDE.local.md

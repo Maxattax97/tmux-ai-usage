@@ -43,10 +43,20 @@ activity_process_name() {
 	printf '%s\n' "${name##*/}"
 }
 
-# The hook runs a few levels below the agent itself, so walk up until the agent
-# process is found. Its liveness is what "still working" really means.
+# A hook runs a few levels below the agent itself, so walk up until the agent
+# process is found. Its liveness is what "still working" really means. Agents
+# that can report their own PID (an in-process plugin, say) pass it instead.
 activity_owner_pid() {
 	agent=$1
+
+	case ${AI_USAGE_OWNER_PID:-} in
+	'' | *[!0-9]*) ;;
+	*)
+		printf '%s\n' "$AI_USAGE_OWNER_PID"
+		return 0
+		;;
+	esac
+
 	pid=$$
 	depth=0
 
@@ -72,11 +82,14 @@ activity_owner_pid() {
 # was ever recorded, so only the TTL can judge the marker.
 activity_owner_state() {
 	marker=$1
-	agent=$2
 
 	pid=
+	owner=
 	while IFS='=' read -r key value; do
-		[ "$key" = "pid" ] && pid=$value
+		case $key in
+		pid) pid=$value ;;
+		owner) owner=$value ;;
+		esac
 	done <"$marker"
 
 	case $pid in
@@ -87,13 +100,12 @@ activity_owner_state() {
 	esac
 
 	if kill -0 "$pid" 2>/dev/null; then
-		# Guard against PID reuse handing us an unrelated process.
-		case $(activity_process_name "$pid" || true) in
-		"$agent" | "$agent "*)
+		# The process name recorded at begin time guards against PID reuse
+		# handing us an unrelated process.
+		if [ "$(activity_process_name "$pid" || true)" = "$owner" ]; then
 			printf 'alive\n'
 			return
-			;;
-		esac
+		fi
 	fi
 
 	printf 'dead\n'
@@ -102,7 +114,14 @@ activity_owner_state() {
 activity_begin() {
 	mkdir -p "$ACTIVITY_DIR"
 	marker=$(activity_marker "$1" "$2")
-	printf 'pid=%s\n' "$(activity_owner_pid "$1" || true)" >"$marker"
+	pid=$(activity_owner_pid "$1" || true)
+
+	{
+		printf 'pid=%s\n' "$pid"
+		[ -n "$pid" ] && printf 'owner=%s\n' "$(activity_process_name "$pid" || true)"
+	} >"$marker"
+
+	return 0
 }
 
 activity_end() {
@@ -117,12 +136,9 @@ activity_prune() {
 	for marker in "$ACTIVITY_DIR"/*; do
 		[ -f "$marker" ] || continue
 
-		agent=${marker##*/}
-		agent=${agent%%-*}
-
 		age=$((now - $(activity_mtime "$marker")))
 
-		case $(activity_owner_state "$marker" "$agent") in
+		case $(activity_owner_state "$marker") in
 		# A live owner is not proof of work: a turn interrupted with Esc
 		# fires no Stop hook, so cap even a live session at ACTIVITY_MAX.
 		alive) limit=$ACTIVITY_MAX ;;

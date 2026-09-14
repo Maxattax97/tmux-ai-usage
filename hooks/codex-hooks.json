@@ -1,0 +1,84 @@
+{
+  "description": "Mark codex sessions active in the tmux status bar and hold off system sleep while they work",
+  "hooks": {
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "command": "\"${AI_USAGE_HOME:-$HOME/.tmux/plugins/tmux-ai-usage}/scripts/ai-activity\" --agent codex end",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "command": "\"${AI_USAGE_HOME:-$HOME/.tmux/plugins/tmux-ai-usage}/scripts/ai-activity\" --agent codex end",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "\"${AI_USAGE_HOME:-$HOME/.tmux/plugins/tmux-ai-usage}/scripts/ai-activity\" --agent codex begin",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": ".*"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "\"${AI_USAGE_HOME:-$HOME/.tmux/plugins/tmux-ai-usage}/scripts/ai-activity\" --agent codex begin",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": ".*"
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "command": "\"${AI_USAGE_HOME:-$HOME/.tmux/plugins/tmux-ai-usage}/scripts/ai-activity\" --agent codex end",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "\"${AI_USAGE_HOME:-$HOME/.tmux/plugins/tmux-ai-usage}/scripts/ai-activity\" --agent codex end",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "command": "\"${AI_USAGE_HOME:-$HOME/.tmux/plugins/tmux-ai-usage}/scripts/ai-activity\" --agent codex begin",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}

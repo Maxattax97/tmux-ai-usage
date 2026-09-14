@@ -26,15 +26,21 @@ export AI_USAGE_ACTIVE_TTL AI_USAGE_ACTIVE_MAX AI_USAGE_INHIBIT_SLEEP
 
 usage() {
 	cat >&2 <<'USAGE'
-usage: ai-activity begin|end|status|prune [session-id]
+usage: ai-activity [--agent NAME] [--pid PID] begin|end|status|prune [session-id]
 
-Claude Code hook entry point. With no session-id, one is read from the hook
-JSON on stdin (or $CLAUDE_SESSION_ID).
+Agent hook entry point, shared by Claude Code, Codex, and opencode. With no
+session-id, one is read from the hook JSON on stdin, else from
+$CLAUDE_SESSION_ID or $CODEX_SESSION_ID.
 
   begin   mark this session as actively working, inhibit system sleep
   end     mark this session idle, release sleep inhibition if all are idle
   status  print the active/idle icon
   prune   drop abandoned markers and resync sleep inhibition
+
+  --agent NAME  which agent this session belongs to (default: claude, or
+                $AI_USAGE_AGENT). Markers are namespaced per agent.
+  --pid PID     PID of the owning agent process, for callers that know it.
+                Otherwise it is found by walking up from this process.
 USAGE
 	exit 2
 }
@@ -68,11 +74,37 @@ resolve_session_id() {
 	fi
 
 	session=$(read_session_id_from_stdin || true)
-	[ -n "$session" ] || session=${CLAUDE_SESSION_ID:-default}
+	[ -n "$session" ] || session=${CLAUDE_SESSION_ID:-${CODEX_SESSION_ID:-default}}
 	printf '%s\n' "$session"
 }
 
 AGENT=${AI_USAGE_AGENT:-claude}
+
+while [ $# -gt 0 ]; do
+	case $1 in
+	--agent)
+		AGENT=${2:-}
+		shift 2 || usage
+		;;
+	--pid)
+		AI_USAGE_OWNER_PID=${2:-}
+		export AI_USAGE_OWNER_PID
+		shift 2 || usage
+		;;
+	--)
+		shift
+		break
+		;;
+	-*) usage ;;
+	*) break ;;
+	esac
+done
+
+[ -n "$AGENT" ] || usage
+case $AGENT in
+*[!A-Za-z0-9._]*) usage ;;
+esac
+
 ACTIVE_ICON=${AI_USAGE_ACTIVE_ICON:-$(get_tmux_option "@ai_usage_active_icon" "●")}
 IDLE_ICON=${AI_USAGE_IDLE_ICON:-$(get_tmux_option "@ai_usage_idle_icon" "")}
 
