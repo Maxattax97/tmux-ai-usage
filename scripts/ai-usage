@@ -3,276 +3,276 @@
 set -eu
 
 get_tmux_option() {
-	option=$1
-	default=$2
-	value=$(tmux show-option -gqv "$option" 2>/dev/null || true)
+    option=$1
+    default=$2
+    value=$(tmux show-option -gqv "$option" 2> /dev/null || true)
 
-	if [ -n "$value" ]; then
-		printf '%s\n' "$value"
-	else
-		printf '%s\n' "$default"
-	fi
+    if [ -n "$value" ]; then
+        printf '%s\n' "$value"
+    else
+        printf '%s\n' "$default"
+    fi
 }
 
 read_kv_value() {
-	file_path=$1
-	target_key=$2
-	value=
+    file_path=$1
+    target_key=$2
+    value=
 
-	[ -f "$file_path" ] || return 1
+    [ -f "$file_path" ] || return 1
 
-	while IFS='=' read -r key raw_value; do
-		[ "$key" = "$target_key" ] || continue
-		value=$raw_value
-		break
-	done <"$file_path"
+    while IFS='=' read -r key raw_value; do
+        [ "$key" = "$target_key" ] || continue
+        value=$raw_value
+        break
+    done < "$file_path"
 
-	[ -n "$value" ] || return 1
-	printf '%s\n' "$value"
+    [ -n "$value" ] || return 1
+    printf '%s\n' "$value"
 }
 
 decorate() {
-	if [ -n "$ICON" ]; then
-		printf '%s %s\n' "$ICON" "$1"
-	else
-		printf '%s\n' "$1"
-	fi
+    if [ -n "$ICON" ]; then
+        printf '%s %s\n' "$ICON" "$1"
+    else
+        printf '%s\n' "$1"
+    fi
 }
 
 label_unknown() {
-	printf '%s\n' "$UNKNOWN"
+    printf '%s\n' "$UNKNOWN"
 }
 
 write_cache() {
-	value=$1
-	tmp_file=$(mktemp "$CACHE_DIR/tmux-ai-usage-status.tmp.XXXXXX")
+    value=$1
+    tmp_file=$(mktemp "$CACHE_DIR/tmux-ai-usage-status.tmp.XXXXXX")
 
-	umask 077
-	printf '%s\n' "$value" >"$tmp_file"
-	mv "$tmp_file" "$CACHE_FILE"
+    umask 077
+    printf '%s\n' "$value" > "$tmp_file"
+    mv "$tmp_file" "$CACHE_FILE"
 }
 
 write_meta() {
-	tmp_file=$(mktemp "$CACHE_DIR/tmux-ai-usage-status.meta.tmp.XXXXXX")
-	failure_count=${1:-0}
-	source_mtime=${2:-0}
+    tmp_file=$(mktemp "$CACHE_DIR/tmux-ai-usage-status.meta.tmp.XXXXXX")
+    failure_count=${1:-0}
+    source_mtime=${2:-0}
 
-	umask 077
-	{
-		printf 'provider=%s\n' "$PROVIDER"
-		printf 'unknown=%s\n' "$UNKNOWN"
-		printf 'failure_count=%s\n' "$failure_count"
-		printf 'source_mtime=%s\n' "$source_mtime"
-	} >"$tmp_file"
-	mv "$tmp_file" "$META_FILE"
+    umask 077
+    {
+        printf 'provider=%s\n' "$PROVIDER"
+        printf 'unknown=%s\n' "$UNKNOWN"
+        printf 'failure_count=%s\n' "$failure_count"
+        printf 'source_mtime=%s\n' "$source_mtime"
+    } > "$tmp_file"
+    mv "$tmp_file" "$META_FILE"
 }
 
 meta_failure_count() {
-	[ -f "$META_FILE" ] || {
-		printf '0\n'
-		return
-	}
+    [ -f "$META_FILE" ] || {
+        printf '0\n'
+        return
+    }
 
-	value=0
-	while IFS='=' read -r key raw_value; do
-		[ "$key" = "failure_count" ] || continue
-		value=$raw_value
-		break
-	done <"$META_FILE"
+    value=0
+    while IFS='=' read -r key raw_value; do
+        [ "$key" = "failure_count" ] || continue
+        value=$raw_value
+        break
+    done < "$META_FILE"
 
-	case $value in
-	'' | *[!0-9]*) printf '0\n' ;;
-	*) printf '%s\n' "$value" ;;
-	esac
+    case $value in
+        '' | *[!0-9]*) printf '0\n' ;;
+        *) printf '%s\n' "$value" ;;
+    esac
 }
 
 meta_source_mtime() {
-	[ -f "$META_FILE" ] || {
-		printf '0\n'
-		return
-	}
+    [ -f "$META_FILE" ] || {
+        printf '0\n'
+        return
+    }
 
-	value=0
-	while IFS='=' read -r key raw_value; do
-		[ "$key" = "source_mtime" ] || continue
-		value=$raw_value
-		break
-	done <"$META_FILE"
+    value=0
+    while IFS='=' read -r key raw_value; do
+        [ "$key" = "source_mtime" ] || continue
+        value=$raw_value
+        break
+    done < "$META_FILE"
 
-	case $value in
-	'' | *[!0-9]*) printf '0\n' ;;
-	*) printf '%s\n' "$value" ;;
-	esac
+    case $value in
+        '' | *[!0-9]*) printf '0\n' ;;
+        *) printf '%s\n' "$value" ;;
+    esac
 }
 
 cached_value() {
-	[ -f "$CACHE_FILE" ] || return 1
-	cat "$CACHE_FILE"
+    [ -f "$CACHE_FILE" ] || return 1
+    cat "$CACHE_FILE"
 }
 
 unknown() {
-	value=$(label_unknown)
-	write_cache "$value"
-	write_meta 0 0
-	decorate "$value"
-	exit 0
+    value=$(label_unknown)
+    write_cache "$value"
+    write_meta 0 0
+    decorate "$value"
+    exit 0
 }
 
 unknown_with_retries() {
-	failure_count=$(meta_failure_count)
-	failure_count=$((failure_count + 1))
+    failure_count=$(meta_failure_count)
+    failure_count=$((failure_count + 1))
 
-	if [ "$failure_count" -le 3 ] && cached=$(cached_value 2>/dev/null); then
-		case $cached in
-		'' | '?') ;;
-		*)
-			write_meta "$failure_count" "$(meta_source_mtime)"
-			decorate "$cached"
-			exit 0
-			;;
-		esac
-	fi
+    if [ "$failure_count" -le 3 ] && cached=$(cached_value 2> /dev/null); then
+        case $cached in
+            '' | '?') ;;
+            *)
+                write_meta "$failure_count" "$(meta_source_mtime)"
+                decorate "$cached"
+                exit 0
+                ;;
+        esac
+    fi
 
-	value=$(label_unknown)
-	write_cache "$value"
-	write_meta "$failure_count" 0
-	decorate "$value"
-	exit 0
+    value=$(label_unknown)
+    write_cache "$value"
+    write_meta "$failure_count" 0
+    decorate "$value"
+    exit 0
 }
 
 get_mtime() {
-	path=$1
+    path=$1
 
-	# Failed GNU stat -f emits stdout; capture each attempt before printing.
-	if mtime=$(stat -c %Y "$path" 2>/dev/null) || mtime=$(stat -f %m "$path" 2>/dev/null); then
-		printf '%s\n' "$mtime"
-	else
-		printf '0\n'
-	fi
+    # Failed GNU stat -f emits stdout; capture each attempt before printing.
+    if mtime=$(stat -c %Y "$path" 2> /dev/null) || mtime=$(stat -f %m "$path" 2> /dev/null); then
+        printf '%s\n' "$mtime"
+    else
+        printf '0\n'
+    fi
 }
 
 current_source_mtime() {
-	latest=0
+    latest=0
 
-	if [ -f "$CLAUDE_CACHE_FILE" ]; then
-		mtime=$(get_mtime "$CLAUDE_CACHE_FILE")
-		[ "$mtime" -gt "$latest" ] && latest=$mtime
-	fi
+    if [ -f "$CLAUDE_CACHE_FILE" ]; then
+        mtime=$(get_mtime "$CLAUDE_CACHE_FILE")
+        [ "$mtime" -gt "$latest" ] && latest=$mtime
+    fi
 
-	# shellcheck disable=SC2012 # newest-first ordering; paths are safe
-	latest_codex_file=$(LC_ALL=C ls -1t "$HOME"/.codex/sessions/*/*/*/rollout-*.jsonl 2>/dev/null | sed -n '1p' || true)
-	if [ -n "$latest_codex_file" ] && [ -f "$latest_codex_file" ]; then
-		mtime=$(get_mtime "$latest_codex_file")
-		[ "$mtime" -gt "$latest" ] && latest=$mtime
-	fi
+    # shellcheck disable=SC2012 # newest-first ordering; paths are safe
+    latest_codex_file=$(LC_ALL=C ls -1t "$HOME"/.codex/sessions/*/*/*/rollout-*.jsonl 2> /dev/null | sed -n '1p' || true)
+    if [ -n "$latest_codex_file" ] && [ -f "$latest_codex_file" ]; then
+        mtime=$(get_mtime "$latest_codex_file")
+        [ "$mtime" -gt "$latest" ] && latest=$mtime
+    fi
 
-	printf '%s\n' "$latest"
+    printf '%s\n' "$latest"
 }
 
 read_cache() {
-	[ -f "$CACHE_FILE" ] || return 1
-	[ -f "$META_FILE" ] || return 1
+    [ -f "$CACHE_FILE" ] || return 1
+    [ -f "$META_FILE" ] || return 1
 
-	now=$(date +%s)
-	mtime=$(get_mtime "$CACHE_FILE")
-	age=$((now - mtime))
+    now=$(date +%s)
+    mtime=$(get_mtime "$CACHE_FILE")
+    age=$((now - mtime))
 
-	[ "$age" -lt "$INTERVAL" ] || return 1
+    [ "$age" -lt "$INTERVAL" ] || return 1
 
-	source_mtime=$(current_source_mtime)
-	meta_failure=$(meta_failure_count)
-	expected_meta=$(mktemp "${TMPDIR:-/tmp}/tmux-ai-usage-status.meta.expected.XXXXXX")
-	trap 'rm -f "$expected_meta"' EXIT HUP INT TERM
-	{
-		printf 'provider=%s\n' "$PROVIDER"
-		printf 'unknown=%s\n' "$UNKNOWN"
-		printf 'failure_count=%s\n' "$meta_failure"
-		printf 'source_mtime=%s\n' "$source_mtime"
-	} >"$expected_meta"
+    source_mtime=$(current_source_mtime)
+    meta_failure=$(meta_failure_count)
+    expected_meta=$(mktemp "${TMPDIR:-/tmp}/tmux-ai-usage-status.meta.expected.XXXXXX")
+    trap 'rm -f "$expected_meta"' EXIT HUP INT TERM
+    {
+        printf 'provider=%s\n' "$PROVIDER"
+        printf 'unknown=%s\n' "$UNKNOWN"
+        printf 'failure_count=%s\n' "$meta_failure"
+        printf 'source_mtime=%s\n' "$source_mtime"
+    } > "$expected_meta"
 
-	if [ "$(meta_source_mtime)" -lt "$source_mtime" ]; then
-		rm -f "$expected_meta"
-		trap - EXIT HUP INT TERM
-		return 1
-	fi
+    if [ "$(meta_source_mtime)" -lt "$source_mtime" ]; then
+        rm -f "$expected_meta"
+        trap - EXIT HUP INT TERM
+        return 1
+    fi
 
-	if cmp -s "$META_FILE" "$expected_meta"; then
-		rm -f "$expected_meta"
-		trap - EXIT HUP INT TERM
-		decorate "$(cat "$CACHE_FILE")"
-		return 0
-	fi
+    if cmp -s "$META_FILE" "$expected_meta"; then
+        rm -f "$expected_meta"
+        trap - EXIT HUP INT TERM
+        decorate "$(cat "$CACHE_FILE")"
+        return 0
+    fi
 
-	rm -f "$expected_meta"
-	trap - EXIT HUP INT TERM
-	return 1
+    rm -f "$expected_meta"
+    trap - EXIT HUP INT TERM
+    return 1
 }
 
 normalize_interval() {
-	case $1 in
-	'' | *[!0-9]*) printf '60\n' ;;
-	*) printf '%s\n' "$1" ;;
-	esac
+    case $1 in
+        '' | *[!0-9]*) printf '60\n' ;;
+        *) printf '%s\n' "$1" ;;
+    esac
 }
 
 is_recent_file() {
-	path=$1
-	max_age=$2
+    path=$1
+    max_age=$2
 
-	[ -f "$path" ] || return 1
+    [ -f "$path" ] || return 1
 
-	now=$(date +%s)
-	mtime=$(get_mtime "$path")
-	age=$((now - mtime))
+    now=$(date +%s)
+    mtime=$(get_mtime "$path")
+    age=$((now - mtime))
 
-	[ "$age" -lt "$max_age" ]
+    [ "$age" -lt "$max_age" ]
 }
 
 clamp_percent() {
-	value=$1
+    value=$1
 
-	case $value in
-	'' | *[!0-9-]*) return 1 ;;
-	esac
+    case $value in
+        '' | *[!0-9-]*) return 1 ;;
+    esac
 
-	if [ "$value" -lt 0 ]; then
-		value=0
-	fi
+    if [ "$value" -lt 0 ]; then
+        value=0
+    fi
 
-	if [ "$value" -gt 100 ]; then
-		value=100
-	fi
+    if [ "$value" -gt 100 ]; then
+        value=100
+    fi
 
-	printf '%s\n' "$value"
+    printf '%s\n' "$value"
 }
 
 fetch_claude_percent() {
-	[ -f "$CLAUDE_CACHE_FILE" ] || return 1
+    [ -f "$CLAUDE_CACHE_FILE" ] || return 1
 
-	available=$(read_kv_value "$CLAUDE_CACHE_FILE" "available" || true)
-	[ "$available" = "true" ] || return 1
+    available=$(read_kv_value "$CLAUDE_CACHE_FILE" "available" || true)
+    [ "$available" = "true" ] || return 1
 
-	remaining=$(read_kv_value "$CLAUDE_CACHE_FILE" "remaining_percentage" || true)
-	if [ -n "$remaining" ]; then
-		printf '%s\n' "$remaining"
-		return 0
-	fi
+    remaining=$(read_kv_value "$CLAUDE_CACHE_FILE" "remaining_percentage" || true)
+    if [ -n "$remaining" ]; then
+        printf '%s\n' "$remaining"
+        return 0
+    fi
 
-	used=$(read_kv_value "$CLAUDE_CACHE_FILE" "used_percentage" || true)
-	[ -n "$used" ] || return 1
+    used=$(read_kv_value "$CLAUDE_CACHE_FILE" "used_percentage" || true)
+    [ -n "$used" ] || return 1
 
-	awk -v used="$used" 'BEGIN { printf "%d\n", 100 - used }'
+    awk -v used="$used" 'BEGIN { printf "%d\n", 100 - used }'
 }
 
 fetch_codex_percent() {
-	# shellcheck disable=SC2012 # newest-first ordering; paths are safe
-	latest_file=$(LC_ALL=C ls -1t "$HOME"/.codex/sessions/*/*/*/rollout-*.jsonl 2>/dev/null | sed -n '1p' || true)
-	[ -n "$latest_file" ] || return 1
+    # shellcheck disable=SC2012 # newest-first ordering; paths are safe
+    latest_file=$(LC_ALL=C ls -1t "$HOME"/.codex/sessions/*/*/*/rollout-*.jsonl 2> /dev/null | sed -n '1p' || true)
+    [ -n "$latest_file" ] || return 1
 
-	# Match Codex's own status behavior and ignore stale snapshots.
-	is_recent_file "$latest_file" 900 || return 1
+    # Match Codex's own status behavior and ignore stale snapshots.
+    is_recent_file "$latest_file" 900 || return 1
 
-	awk '
+    awk '
         function extract_primary_percent(line,    primary_idx, rest, key_idx, value) {
             primary_idx = index(line, "\"primary\"")
             if (primary_idx == 0) {
@@ -311,25 +311,25 @@ fetch_codex_percent() {
 }
 
 resolve_percent() {
-	case $PROVIDER in
-	auto)
-		percent=$(fetch_claude_percent || true)
-		if [ -z "$percent" ]; then
-			percent=$(fetch_codex_percent || true)
-		fi
-		;;
-	claude)
-		percent=$(fetch_claude_percent || true)
-		;;
-	codex)
-		percent=$(fetch_codex_percent || true)
-		;;
-	*)
-		percent=
-		;;
-	esac
+    case $PROVIDER in
+        auto)
+            percent=$(fetch_claude_percent || true)
+            if [ -z "$percent" ]; then
+                percent=$(fetch_codex_percent || true)
+            fi
+            ;;
+        claude)
+            percent=$(fetch_claude_percent || true)
+            ;;
+        codex)
+            percent=$(fetch_codex_percent || true)
+            ;;
+        *)
+            percent=
+            ;;
+    esac
 
-	printf '%s\n' "$percent"
+    printf '%s\n' "$percent"
 }
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -361,13 +361,13 @@ activity_prune
 inhibit_sync
 
 if activity_is_active; then
-	ICON=$ACTIVE_ICON
+    ICON=$ACTIVE_ICON
 else
-	ICON=$IDLE_ICON
+    ICON=$IDLE_ICON
 fi
 
 if read_cache; then
-	exit 0
+    exit 0
 fi
 
 percent=$(resolve_percent)
@@ -376,7 +376,7 @@ source_mtime=$(current_source_mtime)
 percent=$(clamp_percent "$percent" || true)
 
 if [ -z "$percent" ]; then
-	unknown_with_retries
+    unknown_with_retries
 fi
 
 value=$(printf '%s%%' "$percent")
