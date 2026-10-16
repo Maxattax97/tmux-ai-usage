@@ -23,7 +23,13 @@ esac
 ACTIVITY_INHIBIT=${AI_USAGE_INHIBIT_SLEEP:-on}
 
 activity_mtime() {
-	stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || printf '0\n'
+	# Capture failed stat output: GNU stat -f prints filesystem information
+	# before rejecting the BSD format, which must not enter date arithmetic.
+	if mtime=$(stat -c %Y "$1" 2>/dev/null) || mtime=$(stat -f %m "$1" 2>/dev/null); then
+		printf '%s\n' "$mtime"
+	else
+		printf '0\n'
+	fi
 }
 
 activity_marker() {
