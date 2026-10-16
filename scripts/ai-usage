@@ -143,7 +143,12 @@ unknown_with_retries() {
 get_mtime() {
 	path=$1
 
-	stat -f %m "$path" 2>/dev/null || stat -c %Y "$path" 2>/dev/null || printf '0\n'
+	# Failed GNU stat -f emits stdout; capture each attempt before printing.
+	if mtime=$(stat -c %Y "$path" 2>/dev/null) || mtime=$(stat -f %m "$path" 2>/dev/null); then
+		printf '%s\n' "$mtime"
+	else
+		printf '0\n'
+	fi
 }
 
 current_source_mtime() {
